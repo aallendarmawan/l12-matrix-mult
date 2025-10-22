@@ -303,7 +303,7 @@ int main(int argc, char *argv[]) {
     
     for (int t = 0; t < num_threads; t++) {
         compute_args[t].matrixA = local_A;
-        compute_args[t].matrixB = (rank == 0) ? local_B : local_B;
+        compute_args[t].matrixB = local_B;
         compute_args[t].matrixC = local_C;
         compute_args[t].start_row = t * rows_per_thread + (t < remaining_thread_rows ? t : remaining_thread_rows);
         compute_args[t].end_row = compute_args[t].start_row + rows_per_thread + (t < remaining_thread_rows ? 1 : 0);
