@@ -442,32 +442,45 @@ int main(int argc, char *argv[]) {
     
     // ==================== ROOT WRITES RESULT ====================
     if (rank == 0) {
-        printf("\n[Root] Writing result to %s - Start\n", matrixC_Filename);
+        // Only the root MPI process performs I/O
+        printf("\nRoot: begin writing result to %s\n", matrixC_Filename);
         
+        // Try to open the output file: writing in binary mode
         FILE *pFileC = fopen(matrixC_Filename, "wb");
+
+        // If the file cannot be created/opened
         if (pFileC == NULL) {
-            printf("Error: Unable to create output file %s.\n", matrixC_Filename);
+
+            printf("Error: unable to create output file %s!!\n", matrixC_Filename);
+
+            // Free allocated memory and then abort failed task
             free(pMatrixA);
             free(pMatrixB);
             free(pMatrixC);
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
         
+        // Otherwise, get no. rows and columns of result matrix C
         int rowC = rowA, colC = colB;
+        // Write dimensions for matrix C
         fwrite(&rowC, sizeof(int), 1, pFileC);
         fwrite(&colC, sizeof(int), 1, pFileC);
         
+        // Write the actual data of matrix C
         for (int i = 0; i < rowC; i++) {
+            // Write one row at a time
             fwrite(&pMatrixC[i * colC], sizeof(unsigned long long), colC, pFileC);
         }
         
         fclose(pFileC);
-        printf("[Root] Writing complete\n");
+        printf("[Root: writing is complete:D\n");
         
+        // Calculate time taken
         clock_gettime(CLOCK_MONOTONIC, &end);
         time_taken = (end.tv_sec - start.tv_sec) * 1e9;
         time_taken = (time_taken + (end.tv_nsec - start.tv_nsec)) * 1e-9;
         
+        // Print summary of results (and overall time taken)
         printf("\n=== Results ===\n");
         printf("Matrix A: %d x %d\n", rowA, colA);
         printf("Matrix B: %d x %d\n", rowB, colB);
@@ -479,15 +492,18 @@ int main(int argc, char *argv[]) {
     
     // ==================== CLEANUP ====================
     if (rank == 0) {
+        // Root will free all three matrices
         free(pMatrixA);
         free(pMatrixB);
         free(pMatrixC);
     } else {
+        // Non-root processes free only their local tile matrices
         free(local_A);
         free(local_B);
         free(local_C);
     }
     
+    // Ends the MPI parallel environment
     MPI_Finalize();
     return 0;
 }
