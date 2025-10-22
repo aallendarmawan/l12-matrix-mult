@@ -41,14 +41,30 @@ typedef struct {
 
 // Thread function for parallel file reading
 void* read_matrix_thread(void* arg) {
-    ReadThreadArgs *args = (ReadThreadArgs*)arg;
+    ReadThreadArgs *arguments = (ReadThreadArgs*)arg; // cast generic pointer to ReadThreadArgs, so it can access its parameters. 
     
-    for (int i = args->start_row; i < args->end_row; i++) {
-        pthread_mutex_lock(args->file_mutex);
+
+    // for loop 
+    // loops over subset of rows this thread is responsible for reading from disk 
+
+    for (int index = arguments->start_row; index < arguments->end_row; index++) {
+
+        // check lock state 
+        // if unlocked - locks it immediately 
+        // if locked, calling thread doesn't proceed. 
+
+        pthread_mutex_lock(arguments->file_mutex);
+
         // Seek to the correct position: skip header (2 ints) + previous rows
-        fseek(args->file, 2 * sizeof(int) + i * args->cols * sizeof(int), SEEK_SET);
-        fread(&args->matrix[i * args->cols], sizeof(int), args->cols, args->file);
-        pthread_mutex_unlock(args->file_mutex);
+        // fseek - move the file's read/write cursor to start of desired row. 
+        fseek(arguments->file, 2 * sizeof(int) + index * arguments->cols * sizeof(int), SEEK_SET);
+
+        // reads one entire row of integers from file into memory 
+        fread(&arguments->matrix[index * arguments->cols], sizeof(int), arguments->cols, arguments->file);
+
+        // releases the mutext that the current thread previously locked. 
+        // marks the mutex as avaliable 
+        pthread_mutex_unlock(arguments->file_mutex);
     }
     
     return NULL;
@@ -56,21 +72,35 @@ void* read_matrix_thread(void* arg) {
 
 // Thread function for parallel matrix multiplication
 void* compute_matrix_thread(void* arg) {
-    ComputeThreadArgs *args = (ComputeThreadArgs*)arg;
+    ComputeThreadArgs *arguments = (ComputeThreadArgs*)arg;
     
-    for (int i = args->start_row; i < args->end_row; i++) {
-        for (int j = 0; j < args->colB; j++) {
+    // Compute A x B 
+    // outer loop goes through rows of A and C which this thread is responsible for 
+    for (int index = arguments->start_row; index < arguments->end_row; index++) {
+
+        // middle loop goes through each column of B 
+        for (int j = 0; j < arguments->colB; j++) {
+
             unsigned long long sum = 0;
-            for (int k = 0; k < args->colA; k++) {
-                sum += (unsigned long long)args->matrixA[i * args->colA + k] * 
-                       (unsigned long long)args->matrixB[k * args->colB + j];
+
+            // innermost loop goes through all the elements in row index of A and column j of B 
+            // this is where dot product takes place 
+            for (int k = 0; k < arguments->colA; k++) {
+
+                //dot product 
+                sum += (unsigned long long)arguments->matrixA[index * arguments->colA + k] * 
+                       (unsigned long long)arguments->matrixB[k * arguments->colB + j];
             }
-            args->matrixC[i * args->colB + j] = sum;
+            // store the computed value into correct cell in result matrix C 
+            arguments->matrixC[index * arguments->colB + j] = sum;
         }
     }
     
+    //standard pthread convention 
     return NULL;
 }
+
+
 
 int main(int argc, char *argv[]) {
     int rank, size;
