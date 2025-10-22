@@ -273,55 +273,92 @@ int main(int argc, char *argv[]) {
     MPI_Bcast(&colB, 1, MPI_INT, 0, MPI_COMM_WORLD);
     
     // ==================== TILE-BASED DISTRIBUTION ====================
-    // Calculate rows per process
-    int rows_per_process = rowA / size;
-    int remaining_rows = rowA % size;
-    int my_start_row = rank * rows_per_process + (rank < remaining_rows ? rank : remaining_rows);
-    int my_num_rows = rows_per_process + (rank < remaining_rows ? 1 : 0);
+    // Calculate 2D process grid (as square as possible)
+    int tile_rows = (int)sqrt(size);
+    while (size % tile_rows != 0) tile_rows--;
+    int tile_cols = size / tile_rows;
+    
+    // This process's position in 2D grid
+    int tile_row_pos = rank / tile_cols;
+    int tile_col_pos = rank % tile_cols;
+    
+    // Calculate tile dimensions for rows (Matrix A)
+    int rows_per_process = rowA / tile_rows;
+    int remaining_rows_A = rowA % tile_rows;
+    int my_start_row = tile_row_pos * rows_per_process + (tile_row_pos < remaining_rows_A ? tile_row_pos : remaining_rows_A);
+    int my_num_rows = rows_per_process + (tile_row_pos < remaining_rows_A ? 1 : 0);
+    
+    // Calculate tile dimensions for columns (Matrix B)
+    int cols_per_process = colB / tile_cols;
+    int remaining_cols_B = colB % tile_cols;
+    int my_start_col = tile_col_pos * cols_per_process + (tile_col_pos < remaining_cols_B ? tile_col_pos : remaining_cols_B);
+    int my_num_cols = cols_per_process + (tile_col_pos < remaining_cols_B ? 1 : 0);
     
     if (rank == 0) {
-        printf("\n[Root] Distributing tiles to %d MPI processes - Start\n", size);
+        printf("\n[Root] 2D Process Grid: %d x %d (Total: %d processes)\n", tile_rows, tile_cols, size);
     }
     
-    // Allocate local matrices for non-root processes
-    int *local_A = NULL;
-    int *local_B = NULL;
-    unsigned long long *local_C = NULL;
+    // Allocate local matrices for ALL processes (including root)
+    int *local_A = (int*)malloc(my_num_rows * colA * sizeof(int));
+    int *local_B = (int*)malloc(rowB * my_num_cols * sizeof(int));
+    unsigned long long *local_C = (unsigned long long*)calloc(my_num_rows * my_num_cols, sizeof(unsigned long long));
     
-    if (rank != 0) {
-        local_A = (int*)malloc(my_num_rows * colA * sizeof(int));
-        local_B = (int*)malloc(rowB * colB * sizeof(int));
-        local_C = (unsigned long long*)calloc(my_num_rows * colB, sizeof(unsigned long long));
-        
-        if (local_A == NULL || local_B == NULL || local_C == NULL) {
-            printf("[Process %d] Error: Memory allocation failed\n", rank);
-            MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-    } else {
-        local_A = pMatrixA + my_start_row * colA;
-        local_B = pMatrixB;
-        local_C = pMatrixC + my_start_row * colB;
+    if (local_A == NULL || local_B == NULL || local_C == NULL) { 
+        printf("[Process %d] Error: Memory allocation failed\n", rank);
+        MPI_Abort(MPI_COMM_WORLD, 1);
     }
     
-    // Root sends tiles to other processes
+    // Root distributes tiles to ALL processes 
     if (rank == 0) {
-        for (int p = 1; p < size; p++) {
-            int p_start_row = p * rows_per_process + (p < remaining_rows ? p : remaining_rows);
-            int p_num_rows = rows_per_process + (p < remaining_rows ? 1 : 0);
+        for (int p = 0; p < size; p++) {
+            int p_row = p / tile_cols;
+            int p_col = p % tile_cols;
             
-            // Send tile of Matrix A
-            MPI_Send(&pMatrixA[p_start_row * colA], p_num_rows * colA, MPI_INT, p, 0, MPI_COMM_WORLD);
+            // Calculate this process's tile boundaries
+            int p_start_row = p_row * rows_per_process + (p_row < remaining_rows_A ? p_row : remaining_rows_A);
+            int p_num_rows = rows_per_process + (p_row < remaining_rows_A ? 1 : 0);
+            
+            int p_start_col = p_col * cols_per_process + (p_col < remaining_cols_B ? p_col : remaining_cols_B);
+            int p_num_cols = cols_per_process + (p_col < remaining_cols_B ? 1 : 0);
+            
+            printf("[Root] Process %d (grid[%d,%d]): rows[%d:%d], cols[%d:%d]\n", 
+                   p, p_row, p_col, p_start_row, p_start_row + p_num_rows - 1,
+                   p_start_col, p_start_col + p_num_cols - 1);
+            
+            // Extract tile of Matrix A (specific rows, all columns)
+            int *tile_A = (int*)malloc(p_num_rows * colA * sizeof(int));
+            for (int i = 0; i < p_num_rows; i++) {
+                memcpy(&tile_A[i * colA], 
+                       &pMatrixA[(p_start_row + i) * colA], 
+                       colA * sizeof(int));
+            }
+            
+            // Extract tile of Matrix B (all rows, specific columns)
+            int *tile_B = (int*)malloc(rowB * p_num_cols * sizeof(int));
+            for (int i = 0; i < rowB; i++) {
+                memcpy(&tile_B[i * p_num_cols], 
+                       &pMatrixB[i * colB + p_start_col], 
+                       p_num_cols * sizeof(int));
+            }
+            
+            if (p == 0) { 
+                // Root copies to its own local memory
+                memcpy(local_A, tile_A, p_num_rows * colA * sizeof(int));
+                memcpy(local_B, tile_B, rowB * p_num_cols * sizeof(int));
+            } else {
+                // Send tiles to other processes)
+                MPI_Send(tile_A, p_num_rows * colA, MPI_INT, p, 0, MPI_COMM_WORLD);
+                MPI_Send(tile_B, rowB * p_num_cols, MPI_INT, p, 1, MPI_COMM_WORLD);
+            }
+            
+            free(tile_A);
+            free(tile_B);
         }
-        
-        // Broadcast entire Matrix B (all processes need it)
-        MPI_Bcast(pMatrixB, rowB * colB, MPI_INT, 0, MPI_COMM_WORLD);
         printf("[Root] Distribution complete\n");
     } else {
-        // Receive tile of Matrix A
+        // Non-root processes receive their tiles
         MPI_Recv(local_A, my_num_rows * colA, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        
-        // Receive Matrix B via broadcast
-        MPI_Bcast(local_B, rowB * colB, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Recv(local_B, rowB * my_num_cols, MPI_INT, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
     
     // ==================== PARALLEL COMPUTATION WITH THREADS ====================
@@ -343,7 +380,7 @@ int main(int argc, char *argv[]) {
         compute_args[t].end_row = compute_args[t].start_row + rows_per_thread + (t < remaining_thread_rows ? 1 : 0);
         compute_args[t].rowA = my_num_rows;
         compute_args[t].colA = colA;
-        compute_args[t].colB = colB;
+        compute_args[t].colB = my_num_cols; 
         
         pthread_create(&compute_threads[t], NULL, compute_matrix_thread, &compute_args[t]);
     }
@@ -363,18 +400,44 @@ int main(int argc, char *argv[]) {
     if (rank == 0) {
         printf("\n[Root] Gathering results from all processes - Start\n");
         
-        for (int p = 1; p < size; p++) {
-            int p_start_row = p * rows_per_process + (p < remaining_rows ? p : remaining_rows);
-            int p_num_rows = rows_per_process + (p < remaining_rows ? 1 : 0);
+        for (int p = 0; p < size; p++) {
+            int p_row = p / tile_cols;
+            int p_col = p % tile_cols;
             
-            MPI_Recv(&pMatrixC[p_start_row * colB], p_num_rows * colB, MPI_UNSIGNED_LONG_LONG, 
-                     p, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            int p_start_row = p_row * rows_per_process + (p_row < remaining_rows_A ? p_row : remaining_rows_A);
+            int p_num_rows = rows_per_process + (p_row < remaining_rows_A ? 1 : 0);
+            
+            int p_start_col = p_col * cols_per_process + (p_col < remaining_cols_B ? p_col : remaining_cols_B);
+            int p_num_cols = cols_per_process + (p_col < remaining_cols_B ? 1 : 0);
+            
+            unsigned long long *tile_C;
+            
+            if (p == 0) {
+                // Root uses its own local_C
+                tile_C = local_C;
+            } else {
+                // Receive from other processes
+                tile_C = (unsigned long long*)malloc(p_num_rows * p_num_cols * sizeof(unsigned long long));
+                MPI_Recv(tile_C, p_num_rows * p_num_cols, MPI_UNSIGNED_LONG_LONG, 
+                         p, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            }
+            
+            // Place tile into correct position in final result matrix
+            for (int i = 0; i < p_num_rows; i++) {
+                memcpy(&pMatrixC[(p_start_row + i) * colB + p_start_col], 
+                       &tile_C[i * p_num_cols], 
+                       p_num_cols * sizeof(unsigned long long));
+            }
+            
+            if (p != 0) {
+                free(tile_C);
+            }
         }
         
         printf("[Root] Gathering complete\n");
     } else {
         // Send local result to root
-        MPI_Send(local_C, my_num_rows * colB, MPI_UNSIGNED_LONG_LONG, 0, 1, MPI_COMM_WORLD);
+        MPI_Send(local_C, my_num_rows * my_num_cols, MPI_UNSIGNED_LONG_LONG, 0, 2, MPI_COMM_WORLD);
     }
     
     // ==================== ROOT WRITES RESULT ====================
@@ -409,6 +472,7 @@ int main(int argc, char *argv[]) {
         printf("Matrix A: %d x %d\n", rowA, colA);
         printf("Matrix B: %d x %d\n", rowB, colB);
         printf("Matrix C: %d x %d\n", rowC, colC);
+        printf("2D Process Grid: %d x %d\n", tile_rows, tile_cols);
         printf("Overall time (s): %.6lf\n", time_taken);
         printf("\nHybrid MPI + POSIX Threads Matrix Multiplication - Done\n\n");
     }
