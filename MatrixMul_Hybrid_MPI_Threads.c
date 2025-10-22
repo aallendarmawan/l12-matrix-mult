@@ -119,12 +119,13 @@ int main(int argc, char *argv[]) {
         MPI_Finalize();
         return 0;
     }
-    
-    char *matAName = argv[1];
-    char *matBName = argv[2];
-    char *matCName = argv[3];
+    // get the files and number of threads
+    char *matrixA_Filename = argv[1];
+    char *matrixB_Filename = argv[2];
+    char *matrixC_Filename = argv[3];
     int num_threads = atoi(argv[4]);
-    
+    // do not the thread
+    // then gracefully exit
     if (num_threads < 1) {
         if (rank == 0) {
             printf("Error: Number of threads must be at least 1\n");
@@ -137,6 +138,7 @@ int main(int argc, char *argv[]) {
     int *pMatrixA = NULL;
     int *pMatrixB = NULL;
     unsigned long long *pMatrixC = NULL;
+    // reserve more space for the result matrix
     
     struct timespec start, end;
     double time_taken;
@@ -149,11 +151,11 @@ int main(int argc, char *argv[]) {
     
     // ==================== ROOT PROCESS: READ MATRICES WITH THREADS ====================
     if (rank == 0) {
-        printf("[Root] Reading Matrix A (%s) with %d threads - Start\n", matAName, num_threads);
+        printf("[Root] Reading Matrix A (%s) with %d threads - Start\n", matrixA_Filename, num_threads);
         
-        FILE *pFileA = fopen(matAName, "rb");
+        FILE *pFileA = fopen(matrixA_Filename, "rb");
         if (pFileA == NULL) {
-            printf("Error: File %s doesn't exist.\n", matAName);
+            printf("Error: File %s doesn't exist.\n", matrixA_Filename);
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
         
@@ -167,11 +169,13 @@ int main(int argc, char *argv[]) {
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
         
-        // Parallel reading with threads
+        // use threads to parallelise the read on the matrix file
+        // using mutex to lock the file
         pthread_t *read_threads = (pthread_t*)malloc(num_threads * sizeof(pthread_t));
         ReadThreadArgs *read_args = (ReadThreadArgs*)malloc(num_threads * sizeof(ReadThreadArgs));
         pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
         
+        // split loads on to the threads
         int rows_per_thread = rowA / num_threads;
         int remaining_rows = rowA % num_threads;
         
@@ -189,7 +193,7 @@ int main(int argc, char *argv[]) {
         for (int t = 0; t < num_threads; t++) {
             pthread_join(read_threads[t], NULL);
         }
-        
+        // free back the threads and mutex to memory
         free(read_threads);
         free(read_args);
         pthread_mutex_destroy(&file_mutex);
@@ -197,11 +201,11 @@ int main(int argc, char *argv[]) {
         printf("[Root] Reading Matrix A - Done\n");
         
         // Read Matrix B with threads
-        printf("[Root] Reading Matrix B (%s) with %d threads - Start\n", matBName, num_threads);
+        printf("[Root] Reading Matrix B (%s) with %d threads - Start\n", matrixB_Filename, num_threads);
         
-        FILE *pFileB = fopen(matBName, "rb");
+        FILE *pFileB = fopen(matrixB_Filename, "rb");
         if (pFileB == NULL) {
-            printf("Error: File %s doesn't exist.\n", matBName);
+            printf("Error: File %s doesn't exist.\n", matrixB_Filename);
             free(pMatrixA);
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
@@ -333,7 +337,7 @@ int main(int argc, char *argv[]) {
     
     for (int t = 0; t < num_threads; t++) {
         compute_args[t].matrixA = local_A;
-        compute_args[t].matrixB = (rank == 0) ? local_B : local_B;
+        compute_args[t].matrixB = local_B;
         compute_args[t].matrixC = local_C;
         compute_args[t].start_row = t * rows_per_thread + (t < remaining_thread_rows ? t : remaining_thread_rows);
         compute_args[t].end_row = compute_args[t].start_row + rows_per_thread + (t < remaining_thread_rows ? 1 : 0);
@@ -375,11 +379,11 @@ int main(int argc, char *argv[]) {
     
     // ==================== ROOT WRITES RESULT ====================
     if (rank == 0) {
-        printf("\n[Root] Writing result to %s - Start\n", matCName);
+        printf("\n[Root] Writing result to %s - Start\n", matrixC_Filename);
         
-        FILE *pFileC = fopen(matCName, "wb");
+        FILE *pFileC = fopen(matrixC_Filename, "wb");
         if (pFileC == NULL) {
-            printf("Error: Unable to create output file %s.\n", matCName);
+            printf("Error: Unable to create output file %s.\n", matrixC_Filename);
             free(pMatrixA);
             free(pMatrixB);
             free(pMatrixC);
