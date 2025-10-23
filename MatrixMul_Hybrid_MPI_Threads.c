@@ -241,6 +241,10 @@ int main(int argc, char *argv[]) {
         remaining_rows = rowB % num_threads;
 
         //thread creation
+        // each thread gets
+        // File pointer and destination matrix
+        // Range of rows to read
+        // Mutex for synchronisation
         for (int t = 0; t < num_threads; t++) {
             read_args[t].file = pFileB;
             read_args[t].matrix = pMatrixB;
