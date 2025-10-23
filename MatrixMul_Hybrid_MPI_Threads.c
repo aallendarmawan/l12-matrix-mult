@@ -208,10 +208,12 @@ int main(int argc, char *argv[]) {
             free(pMatrixA);
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
-        
+
+        //read the row and column
         fread(&rowB, sizeof(int), 1, pFileB);
         fread(&colB, sizeof(int), 1, pFileB);
-        
+
+        //error catching
         if (colA != rowB) {
             printf("Error: Matrix dimensions incompatible. colA(%d) != rowB(%d)\n", colA, rowB);
             fclose(pFileB);
@@ -226,14 +228,22 @@ int main(int argc, char *argv[]) {
             free(pMatrixA);
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
-        
+
+        //parallel file reading
+        // allocate memory
         read_threads = (pthread_t*)malloc(num_threads * sizeof(pthread_t));
         read_args = (ReadThreadArgs*)malloc(num_threads * sizeof(ReadThreadArgs));
         pthread_mutex_init(&file_mutex, NULL);
-        
+
+        //distribute workload
         rows_per_thread = rowB / num_threads;
         remaining_rows = rowB % num_threads;
-        
+
+        //thread creation
+        // each thread gets
+        // File pointer and destination matrix
+        // Range of rows to read
+        // Mutex for synchronisation
         for (int t = 0; t < num_threads; t++) {
             read_args[t].file = pFileB;
             read_args[t].matrix = pMatrixB;
@@ -244,11 +254,13 @@ int main(int argc, char *argv[]) {
             
             pthread_create(&read_threads[t], NULL, read_matrix_thread, &read_args[t]);
         }
-        
+
+        //synchronisation 
         for (int t = 0; t < num_threads; t++) {
             pthread_join(read_threads[t], NULL);
         }
-        
+
+        // free threads and memory mutexes
         free(read_threads);
         free(read_args);
         pthread_mutex_destroy(&file_mutex);
