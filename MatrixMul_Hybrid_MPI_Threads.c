@@ -42,7 +42,6 @@ typedef struct {
 // Thread function for parallel file reading
 void* read_matrix_thread(void* arg) {
     ReadThreadArgs *arguments = (ReadThreadArgs*)arg; // cast generic pointer to ReadThreadArgs, so it can access its parameters. 
-    
 
     // for loop 
     // loops over subset of rows this thread is responsible for reading from disk 
@@ -473,7 +472,7 @@ int main(int argc, char *argv[]) {
         }
         
         fclose(pFileC);
-        printf("[Root: writing is complete:D\n");
+        printf("Root: writing is complete:D\n");
         
         // Calculate time taken
         clock_gettime(CLOCK_MONOTONIC, &end);
